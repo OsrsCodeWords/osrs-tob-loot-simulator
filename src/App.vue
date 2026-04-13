@@ -203,11 +203,19 @@ function roll(forcedAmount?: number): RollResult {
       recordUniqueDrop(item.id, kc);
       totalUniques.value += 1;
 
-      purpleActive.value = true;
-
       result.uniqueDropped = true;
       result.uniqueId = item.id;
       result.isNew = isNew;
+
+      if (!autoRollEnabled.value) {
+        // Manual roll → always show purple
+        purpleActive.value = true;
+      } else {
+        // Auto-roll → only show if this roll will stop it
+        if (shouldStopAutoRoll(result)) {
+          purpleActive.value = true;
+        }
+      }
     } else {
       /* ---- Normal rolls ---- */
       for (let j = 0; j < 3; j++) {
@@ -284,8 +292,6 @@ function stopAutoRoll() {
 
 function reset() {
   stopAutoRoll();
-  autoRollEnabled.value = false;
-  rollAmount.value = 1;
   obtainedCounts.value = {};
   rollHistory.value = [];
   uniqueDropKc.value.clear();
@@ -293,8 +299,6 @@ function reset() {
   rollCount.value = 0;
   purpleActive.value = false;
   totalUniques.value = 0;
-  selectedUniqueId.value = 106;
-  autoRollStopMode.value = 'any';
 }
 
 onUnmounted(() => {
@@ -311,11 +315,7 @@ onUnmounted(() => {
     <section class="panel controls">
       <header class="top-controls">
         <div class="roll-group">
-          <button
-            class="primary"
-            @click="roll(rollAmount)"
-            :disabled="isAutoRolling && !autoRollEnabled"
-          >
+          <button class="primary" @click="roll(rollAmount)" :disabled="isAutoRolling">
             {{ isAutoRolling ? 'Rolling...' : 'Roll' }}
           </button>
 
@@ -327,25 +327,25 @@ onUnmounted(() => {
           </label>
         </div>
 
-        <button class="danger" @click="reset">Reset</button>
+        <button class="danger" @click="reset" :disabled="isAutoRolling">Reset Loot</button>
       </header>
 
       <div class="auto-roll-options">
         <label class="toggle-switch">
-          <input type="checkbox" v-model="autoRollEnabled" />
+          <input type="checkbox" v-model="autoRollEnabled" :disabled="isAutoRolling" />
           <span class="slider"></span>
           <span class="toggle-label">Auto Roll</span>
         </label>
         <div v-if="autoRollEnabled" class="stop-on-options">
           <label>Stop On</label>
-          <select v-model="autoRollStopMode">
+          <select v-model="autoRollStopMode" :disabled="isAutoRolling">
             <option value="any">Any Unique</option>
             <option value="new">New Unique</option>
             <option value="chosen">Chosen Unique</option>
           </select>
           <div v-if="autoRollEnabled && autoRollStopMode === 'chosen'" class="stop-on-options">
             <label> Target Unique </label>
-            <select v-model.number="selectedUniqueId">
+            <select v-model.number="selectedUniqueId" :disabled="isAutoRolling">
               <option v-for="item in uniqueLoot" :key="item.id" :value="item.id">
                 {{ item.name }}
               </option>
@@ -355,7 +355,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <button class="toggle" @click="ffaEnabled = !ffaEnabled">
+      <button class="toggle" @click="ffaEnabled = !ffaEnabled" :disabled="isAutoRolling">
         {{ ffaEnabled ? 'FFA Enabled' : 'FFA Disabled' }}
       </button>
 
@@ -373,7 +373,13 @@ onUnmounted(() => {
 
         <label>
           Personal MVP Points (0-14)
-          <input type="number" v-model.number="mvpPoints" min="0" max="14" />
+          <input
+            type="number"
+            v-model.number="mvpPoints"
+            min="0"
+            max="14"
+            :disabled="isAutoRolling"
+          />
         </label>
       </section>
 
