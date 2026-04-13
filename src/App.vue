@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, type Ref } from 'vue';
 import { normalLoot, type Loot } from './normalLoot';
 import { uniqueLoot } from './uniqueLoot';
 
@@ -9,12 +9,13 @@ import { uniqueLoot } from './uniqueLoot';
 
 const TEAM_UNIQUE_CHANCE = 0.1099;
 const MAX_HISTORY = 50;
+
 const PET_ITEM: Loot = {
   id: 999,
   name: 'Lil’ Zik',
   img: '/osrs-tob-loot-simulator/items/lil_zik.png',
   unique: true,
-  weight: 0, // not used
+  weight: 0,
 };
 
 /* -----------------------------
@@ -29,6 +30,11 @@ const petDropKc = ref<number[]>([]);
 const rollAmount = ref(1);
 const rollCount = ref(0);
 
+const autoRollEnabled = ref(false);
+const autoRollStopMode = ref<'any' | 'new' | 'chosen'>('any');
+const selectedUniqueId = ref<number | null>(106);
+const autoRollIntervalId: Ref<number | null> = ref(null);
+
 const ffaEnabled = ref(true);
 const teamSize = ref(3);
 const mvpPoints = ref(4);
@@ -40,6 +46,7 @@ const totalUniques = ref(0);
    Computed Values
 ----------------------------- */
 
+const isAutoRolling = computed(() => autoRollIntervalId.value !== null);
 const playerScore = computed(() => 18 + mvpPoints.value);
 const teamScore = computed(() => 14 + teamSize.value * 18);
 
@@ -54,10 +61,7 @@ const itemMap = computed<Record<number, Loot>>(() =>
 
 const totalLoot = computed(() =>
   Object.entries(obtainedCounts.value)
-    .map(([id, count]) => ({
-      id: Number(id),
-      count,
-    }))
+    .map(([id, count]) => ({ id: Number(id), count }))
     .sort((a, b) => b.id - a.id),
 );
 
@@ -79,7 +83,6 @@ type WeightedEntry = {
 
 function buildWeightTable(table: Loot[]): WeightedEntry[] {
   let cumulative = 0;
-
   return table.map((item) => {
     cumulative += item.weight;
     return { item, cumulative };
@@ -94,14 +97,10 @@ const uniqueTotalWeight = uniqueWeightTable.at(-1)!.cumulative;
 
 function weightedRollFast(table: WeightedEntry[], totalWeight: number): Loot {
   const roll = Math.random() * totalWeight;
-
   for (const entry of table) {
-    if (roll <= entry.cumulative) {
-      return entry.item;
-    }
+    if (roll <= entry.cumulative) return entry.item;
   }
-
-  return table[0].item;
+  return table[0]!.item;
 }
 
 /* -----------------------------
@@ -111,7 +110,6 @@ function weightedRollFast(table: WeightedEntry[], totalWeight: number): Loot {
 function rollQuantity(item: Loot): number {
   const min = item.minQty ?? 1;
   const max = item.maxQty ?? min;
-
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
@@ -119,9 +117,7 @@ function recordUniqueDrop(itemId: number, kc: number) {
   if (!uniqueDropKc.value.has(itemId)) {
     uniqueDropKc.value.set(itemId, []);
   }
-
   uniqueDropKc.value.get(itemId)!.push(kc);
-  totalUniques.value += 1;
 }
 
 function hasKc(itemId: number) {
@@ -132,18 +128,12 @@ function hasKc(itemId: number) {
 }
 
 function formatKcList(list: number[]): string {
-  if (list.length <= 15) {
-    return list.join(', ');
-  }
-
-  const start = list.slice(0, 3);
-  const end = list.slice(-5);
-
-  return [...start, '...', ...end].join(', ');
+  if (list.length <= 15) return list.join(', ');
+  return [...list.slice(0, 3), '...', ...list.slice(-5)].join(', ');
 }
 
 /* -----------------------------
-   Purple Logic
+   Roll Logic
 ----------------------------- */
 
 function rollPurple(playerShare: number): boolean {
@@ -153,7 +143,6 @@ function rollPurple(playerShare: number): boolean {
     }
     return false;
   }
-
   return Math.random() < computedUniqueChance.value;
 }
 
@@ -162,10 +151,17 @@ function rollPet() {
 }
 
 /* -----------------------------
-   Public Actions
+   Core Roll Function
 ----------------------------- */
 
-function roll() {
+type RollResult = {
+  uniqueDropped: boolean;
+  uniqueId?: number;
+  isNew?: boolean;
+  petDropped: boolean;
+};
+
+function roll(): RollResult {
   purpleActive.value = false;
 
   const counts = { ...obtainedCounts.value };
@@ -173,29 +169,45 @@ function roll() {
 
   const playerShare = playerScore.value / teamScore.value;
 
+  let result: RollResult = {
+    uniqueDropped: false,
+    petDropped: false,
+    isNew: false,
+  };
+
   for (let i = 0; i < rollAmount.value; i++) {
-    const kc = rollCount.value;
+    const kc = rollCount.value + 1;
+    let petDropped = false;
 
+    /* ---- Pet roll ---- */
     if (rollPet()) {
-      console.log('rolled pet');
-
       petDropKc.value.push(kc);
-
       counts[PET_ITEM.id] = (counts[PET_ITEM.id] || 0) + 1;
       history.unshift(PET_ITEM.id);
+
+      result.petDropped = true;
     }
 
+    /* ---- Unique roll ---- */
     if (rollPurple(playerShare)) {
       const item = weightedRollFast(uniqueWeightTable, uniqueTotalWeight);
       const qty = rollQuantity(item);
+
+      const isNew = !uniqueDropKc.value.has(item.id);
 
       counts[item.id] = (counts[item.id] || 0) + qty;
       history.unshift(item.id);
 
       recordUniqueDrop(item.id, kc);
+      totalUniques.value += 1;
 
       purpleActive.value = true;
+
+      result.uniqueDropped = true;
+      result.uniqueId = item.id;
+      result.isNew = isNew;
     } else {
+      /* ---- Normal rolls ---- */
       for (let j = 0; j < 3; j++) {
         const item = weightedRollFast(normalWeightTable, normalTotalWeight);
         const qty = rollQuantity(item);
@@ -210,9 +222,68 @@ function roll() {
 
   rollHistory.value = [...history, ...rollHistory.value].slice(0, MAX_HISTORY);
   obtainedCounts.value = counts;
+
+  if (autoRollEnabled.value && !autoRollIntervalId.value) {
+    startAutoRoll();
+  }
+
+  return result;
 }
 
+/* -----------------------------
+   Auto Roll Logic
+----------------------------- */
+
+function shouldStopAutoRoll(result: RollResult): boolean {
+  if (!autoRollStopMode.value || (!result.uniqueDropped && !result.petDropped)) {
+    return false;
+  }
+
+  switch (autoRollStopMode.value) {
+    case 'any':
+      return true;
+
+    case 'new':
+      return !!result.isNew;
+
+    case 'chosen':
+      if (selectedUniqueId.value === PET_ITEM.id) {
+        return result.petDropped;
+      }
+
+      return result.uniqueId === selectedUniqueId.value;
+
+    default:
+      return false;
+  }
+}
+
+function startAutoRoll() {
+  if (autoRollIntervalId.value) return;
+
+  autoRollIntervalId.value = setInterval(() => {
+    const result = roll();
+    if (shouldStopAutoRoll(result)) {
+      stopAutoRoll();
+    }
+  }, 50);
+}
+
+function stopAutoRoll() {
+  if (autoRollIntervalId.value) {
+    clearInterval(autoRollIntervalId.value);
+    autoRollIntervalId.value = null;
+  }
+}
+
+/* -----------------------------
+   Reset
+----------------------------- */
+
 function reset() {
+  stopAutoRoll();
+  autoRollEnabled.value = false;
+
   obtainedCounts.value = {};
   rollHistory.value = [];
   uniqueDropKc.value.clear();
@@ -220,6 +291,8 @@ function reset() {
   rollCount.value = 0;
   purpleActive.value = false;
   totalUniques.value = 0;
+  selectedUniqueId.value = 106;
+  autoRollStopMode.value = 'any';
 }
 </script>
 
@@ -232,16 +305,45 @@ function reset() {
     <section class="panel controls">
       <header class="top-controls">
         <div class="roll-group">
-          <button class="primary" @click="roll">Roll</button>
+          <button class="primary" @click="roll" :disabled="isAutoRolling && !autoRollEnabled">
+            {{ isAutoRolling ? 'Rolling...' : 'Roll' }}
+          </button>
 
-          <label class="inline-input">
+          <button v-if="isAutoRolling" class="danger" @click="stopAutoRoll">Stop</button>
+
+          <label v-if="!autoRollEnabled" class="inline-input">
             Rolls
-            <input type="number" v-model.number="rollAmount" min="1" />
+            <input type="number" v-model.number="rollAmount" :disabled="isAutoRolling" min="1" />
           </label>
         </div>
 
         <button class="danger" @click="reset">Reset</button>
       </header>
+
+      <div class="auto-roll-options">
+        <label class="toggle-switch">
+          <input type="checkbox" v-model="autoRollEnabled" />
+          <span class="slider"></span>
+          <span class="toggle-label">Auto Roll</span>
+        </label>
+        <div v-if="autoRollEnabled" class="stop-on-options">
+          <label>Stop On</label>
+          <select v-model="autoRollStopMode">
+            <option value="any">Any Unique</option>
+            <option value="new">New Unique</option>
+            <option value="chosen">Chosen Unique</option>
+          </select>
+          <div v-if="autoRollEnabled && autoRollStopMode === 'chosen'" class="stop-on-options">
+            <label> Target Unique </label>
+            <select v-model.number="selectedUniqueId">
+              <option v-for="item in uniqueLoot" :key="item.id" :value="item.id">
+                {{ item.name }}
+              </option>
+              <option :value="PET_ITEM.id">{{ PET_ITEM.name }}</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
       <button class="toggle" @click="ffaEnabled = !ffaEnabled">
         {{ ffaEnabled ? 'FFA Enabled' : 'FFA Disabled' }}
@@ -250,7 +352,7 @@ function reset() {
       <section class="settings">
         <label>
           Team Size
-          <select v-model.number="teamSize">
+          <select v-model.number="teamSize" :disabled="isAutoRolling">
             <option value="1">1</option>
             <option value="2">2</option>
             <option value="3">3</option>
@@ -291,7 +393,7 @@ function reset() {
     <section class="panel">
       <header>
         <h2>Total Loot: {{ rollCount }} rolls</h2>
-        <span>Total Uniques: {{ totalUniques }}</span>
+        <p>Total Uniques: {{ totalUniques }}</p>
       </header>
 
       <ul class="loot-grid">
@@ -351,6 +453,8 @@ body,
   margin: 0;
 }
 
+/* ---------- Base ---------- */
+
 .main {
   background: radial-gradient(circle at center, #3b3b40 0%, #3b3b40 70%);
   color: #e6e6e6;
@@ -367,55 +471,19 @@ body,
   background: radial-gradient(circle at center, #3b3b40 0%, #6c1dad 70%);
 }
 
+/* ---------- Headings ---------- */
+
 h1 {
   margin-bottom: 20px;
+  color: #ff4d4d;
+  text-shadow: 0 0 12px rgba(255, 60, 60, 0.35);
 }
 
-.buttons button {
-  margin-right: 8px;
+h2 {
+  color: #ff6a6a;
 }
 
-.loot-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, 46px);
-  gap: 1.5rem;
-  align-items: end;
-}
-
-.items-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, 46px);
-  gap: 1.5rem;
-  align-items: end;
-}
-
-.item {
-  position: relative;
-  width: 46px;
-  height: 46px;
-}
-
-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  image-rendering: pixelated;
-}
-
-.greyed {
-  filter: grayscale(100%);
-  opacity: 0.35;
-}
-
-.count {
-  position: absolute;
-  bottom: -4px;
-  right: -4px;
-  background: black;
-  padding: 2px 4px;
-  font-size: 12px;
-  border-radius: 4px;
-}
+/* ---------- Panels ---------- */
 
 .panel {
   background: #1a1a1d;
@@ -450,7 +518,26 @@ img {
   display: flex;
   gap: 24px;
   flex-wrap: wrap;
+  align-items: flex-end;
 }
+
+/* ---------- Auto Roll ---------- */
+
+.auto-roll-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.stop-on-options {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* ---------- Forms ---------- */
 
 label {
   display: flex;
@@ -458,6 +545,7 @@ label {
   gap: 6px;
   font-size: 15px;
   font-weight: 500;
+  color: #d0d0d5;
 }
 
 .inline-input {
@@ -467,24 +555,34 @@ label {
   height: 3rem;
 }
 
-/* ---------- Inputs ---------- */
-
 input,
 select {
   background: #26262b;
   border: 1px solid #3a3a40;
   color: white;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
   font-size: 15px;
-  width: 80px;
+  min-width: 100px;
+}
+
+select {
+  min-width: 160px;
+  max-width: 220px;
+  text-overflow: ellipsis;
 }
 
 input:focus,
 select:focus {
   outline: none;
-  border-color: #6b8cff;
-  box-shadow: 0 0 0 2px rgba(107, 140, 255, 0.25);
+  border-color: #ff4d4d;
+  box-shadow: 0 0 0 2px rgba(255, 60, 60, 0.25);
+}
+
+input:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ---------- Buttons ---------- */
@@ -499,18 +597,36 @@ button {
   transition: all 0.15s ease;
 }
 
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 button.primary {
-  background: linear-gradient(135deg, #4f7cff, #6b8cff);
+  background: linear-gradient(135deg, #3a0f5c, #6c1dad);
+  color: white;
+  width: 15rem;
+  height: 3rem;
+  box-shadow: 0 0 12px rgba(108, 29, 173, 0.45);
+}
+
+button.primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(108, 29, 173, 0.65);
+}
+
+button.danger {
+  background: linear-gradient(135deg, #5c0a0a, #a31515);
   color: white;
   width: 15rem;
   height: 3rem;
 }
 
-button.primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+button.danger:hover:not(:disabled) {
+  background: linear-gradient(135deg, #7a0f0f, #c21f1f);
 }
 
+/* Toggle button */
 button.toggle {
   background: #2a2a2e;
   color: #e6e6e6;
@@ -520,57 +636,47 @@ button.toggle:hover {
   background: #3a3a40;
 }
 
-button.danger {
-  background: #8b2f2f;
-  color: white;
-  width: 15rem;
-  height: 3rem;
+/* ---------- Loot Grids ---------- */
+
+.loot-grid,
+.items-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 46px);
+  gap: 1.5rem;
+  align-items: end;
 }
 
-button.danger:hover {
-  background: #a33a3a;
+.item {
+  position: relative;
+  width: 46px;
+  height: 46px;
 }
 
-/* ---------- Info text ---------- */
-
-.info {
-  display: flex;
-  gap: 20px;
-  flex-wrap: wrap;
-  font-size: 15px;
-  color: #cfcfcf;
-  align-items: center;
-  justify-content: center;
-  padding-top: 1rem;
+img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
 }
 
-.stat {
-  display: flex;
-  flex-direction: column;
-  align-items: baseline;
-  justify-content: center;
-  flex-wrap: wrap;
+.greyed {
+  filter: grayscale(100%);
+  opacity: 0.35;
 }
-.stat .label {
+
+/* ---------- Count Badge ---------- */
+
+.count {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  background: black;
+  padding: 2px 4px;
   font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #9a9aa0;
+  border-radius: 4px;
 }
 
-.stat .value {
-  font-size: 20px;
-  font-weight: 700;
-  color: #ffffff;
-}
-
-.stat .value.highlight {
-  color: #6aa7ff;
-}
-
-.stat .value.purple {
-  color: #c77dff;
-}
+/* ---------- Tooltip ---------- */
 
 .kc-tooltip {
   position: absolute;
@@ -594,7 +700,96 @@ button.danger:hover {
 .item:hover .kc-tooltip {
   opacity: 1;
 }
+
+/* ---------- Info Panel ---------- */
+
+.info {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  font-size: 15px;
+  color: #cfcfcf;
+  align-items: center;
+  justify-content: center;
+  padding-top: 1rem;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 100px;
+}
+
+.stat .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8f8f95;
+}
+
+.stat .value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.stat .value.highlight {
+  color: #6aa7ff;
+}
+
+.stat .value.purple {
+  color: #c77dff;
+}
+
+/* ---------- Toggle Switch ---------- */
+
+.toggle-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.toggle-switch input {
+  display: none;
+}
+
+.slider {
+  position: relative;
+  width: 42px;
+  height: 22px;
+  background: #2a2a2e;
+  border-radius: 999px;
+  transition: background 0.25s ease;
+}
+
+.slider::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 2px;
+  top: 2px;
+  background: #ccc;
+  border-radius: 50%;
+  transition: transform 0.25s ease;
+}
+
+.toggle-switch input:checked + .slider {
+  background: linear-gradient(135deg, #7a0f0f, #c21f1f);
+}
+
+.toggle-switch input:checked + .slider::before {
+  transform: translateX(20px);
+  background: white;
+}
+
+/* ---------- Lists ---------- */
+
 ul {
-  list-style-type: none;
+  list-style: none;
+  padding: 0;
+  margin: 0;
 }
 </style>
