@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, type Ref } from 'vue';
+import { ref, computed, type Ref, onUnmounted } from 'vue';
 import { normalLoot, type Loot } from './normalLoot';
 import { uniqueLoot } from './uniqueLoot';
 
@@ -161,7 +161,7 @@ type RollResult = {
   petDropped: boolean;
 };
 
-function roll(): RollResult {
+function roll(forcedAmount?: number): RollResult {
   purpleActive.value = false;
 
   const counts = { ...obtainedCounts.value };
@@ -175,7 +175,9 @@ function roll(): RollResult {
     isNew: false,
   };
 
-  for (let i = 0; i < rollAmount.value; i++) {
+  const rollsToPerform = forcedAmount ?? rollAmount.value;
+
+  for (let i = 0; i < rollsToPerform; i++) {
     const kc = rollCount.value + 1;
     let petDropped = false;
 
@@ -262,7 +264,7 @@ function startAutoRoll() {
   if (autoRollIntervalId.value) return;
 
   autoRollIntervalId.value = setInterval(() => {
-    const result = roll();
+    const result = roll(1);
     if (shouldStopAutoRoll(result)) {
       stopAutoRoll();
     }
@@ -283,7 +285,7 @@ function stopAutoRoll() {
 function reset() {
   stopAutoRoll();
   autoRollEnabled.value = false;
-
+  rollAmount.value = 1;
   obtainedCounts.value = {};
   rollHistory.value = [];
   uniqueDropKc.value.clear();
@@ -294,6 +296,10 @@ function reset() {
   selectedUniqueId.value = 106;
   autoRollStopMode.value = 'any';
 }
+
+onUnmounted(() => {
+  stopAutoRoll();
+});
 </script>
 
 <template>
@@ -305,7 +311,11 @@ function reset() {
     <section class="panel controls">
       <header class="top-controls">
         <div class="roll-group">
-          <button class="primary" @click="roll" :disabled="isAutoRolling && !autoRollEnabled">
+          <button
+            class="primary"
+            @click="roll(rollAmount)"
+            :disabled="isAutoRolling && !autoRollEnabled"
+          >
             {{ isAutoRolling ? 'Rolling...' : 'Roll' }}
           </button>
 
@@ -506,12 +516,51 @@ h2 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .roll-group {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.inline-input input {
+  width: 70px;
+}
+
+/* ---------- Mobile Layout ---------- */
+
+@media (max-width: 600px) {
+  .top-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .roll-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  button.primary,
+  button.danger {
+    width: 100%;
+  }
+
+  .roll-group button {
+    flex: 1;
+  }
+
+  .inline-input {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .inline-input input {
+    width: 80px;
+  }
 }
 
 .settings {
