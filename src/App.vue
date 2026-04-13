@@ -9,6 +9,13 @@ import { uniqueLoot } from './uniqueLoot';
 
 const TEAM_UNIQUE_CHANCE = 0.1099;
 const MAX_HISTORY = 50;
+const PET_ITEM: Loot = {
+  id: 999,
+  name: 'Lil’ Zik',
+  img: '/osrs-tob-loot-simulator/items/lil_zik.png',
+  unique: true,
+  weight: 0, // not used
+};
 
 /* -----------------------------
    Reactive State
@@ -17,6 +24,7 @@ const MAX_HISTORY = 50;
 const obtainedCounts = ref<Record<number, number>>({});
 const rollHistory = ref<number[]>([]);
 const uniqueDropKc = ref<Map<number, number[]>>(new Map());
+const petDropKc = ref<number[]>([]);
 
 const rollAmount = ref(1);
 const rollCount = ref(0);
@@ -41,7 +49,7 @@ const computedUniqueChance = computed(() => {
 });
 
 const itemMap = computed<Record<number, Loot>>(() =>
-  Object.fromEntries([...normalLoot.value, ...uniqueLoot.value].map((i) => [i.id, i])),
+  Object.fromEntries([...normalLoot.value, ...uniqueLoot.value, PET_ITEM].map((i) => [i.id, i])),
 );
 
 const totalLoot = computed(() =>
@@ -53,7 +61,7 @@ const totalLoot = computed(() =>
     .sort((a, b) => b.id - a.id),
 );
 
-const uniques = computed(() => uniqueLoot.value.filter((i) => i.unique));
+const uniques = computed(() => [...uniqueLoot.value.filter((i) => i.unique), PET_ITEM]);
 
 const collectionProgress = computed(() => {
   const owned = uniques.value.filter((u) => obtainedCounts.value[u.id]).length;
@@ -116,6 +124,24 @@ function recordUniqueDrop(itemId: number, kc: number) {
   totalUniques.value += 1;
 }
 
+function hasKc(itemId: number) {
+  if (itemId === PET_ITEM.id) {
+    return petDropKc.value.length > 0;
+  }
+  return !!uniqueDropKc.value.get(itemId)?.length;
+}
+
+function formatKcList(list: number[]): string {
+  if (list.length <= 15) {
+    return list.join(', ');
+  }
+
+  const start = list.slice(0, 3);
+  const end = list.slice(-5);
+
+  return [...start, '...', ...end].join(', ');
+}
+
 /* -----------------------------
    Purple Logic
 ----------------------------- */
@@ -129,6 +155,10 @@ function rollPurple(playerShare: number): boolean {
   }
 
   return Math.random() < computedUniqueChance.value;
+}
+
+function rollPet() {
+  return Math.random() < 1 / 650;
 }
 
 /* -----------------------------
@@ -145,6 +175,15 @@ function roll() {
 
   for (let i = 0; i < rollAmount.value; i++) {
     const kc = rollCount.value;
+
+    if (rollPet()) {
+      console.log('rolled pet');
+
+      petDropKc.value.push(kc);
+
+      counts[PET_ITEM.id] = (counts[PET_ITEM.id] || 0) + 1;
+      history.unshift(PET_ITEM.id);
+    }
 
     if (rollPurple(playerShare)) {
       const item = weightedRollFast(uniqueWeightTable, uniqueTotalWeight);
@@ -177,6 +216,7 @@ function reset() {
   obtainedCounts.value = {};
   rollHistory.value = [];
   uniqueDropKc.value.clear();
+  petDropKc.value = [];
   rollCount.value = 0;
   purpleActive.value = false;
   totalUniques.value = 0;
@@ -260,8 +300,13 @@ function reset() {
 
           <div class="count" v-if="item.count">x{{ item.count }}</div>
 
-          <div v-if="uniqueDropKc.get(item.id)" class="kc-tooltip">
-            KC: {{ uniqueDropKc.get(item.id)?.join(', ') }}
+          <div v-if="hasKc(item.id)" class="kc-tooltip">
+            KC:
+            {{
+              item.id === PET_ITEM.id
+                ? formatKcList(petDropKc)
+                : formatKcList(uniqueDropKc.get(item.id) ?? [])
+            }}
           </div>
         </li>
       </ul>
@@ -275,7 +320,7 @@ function reset() {
 
       <ul class="items-grid">
         <li
-          v-for="item in uniqueLoot"
+          v-for="item in uniques"
           :key="item.id"
           class="item"
           :class="{ greyed: !obtainedCounts[item.id] }"
@@ -284,8 +329,13 @@ function reset() {
 
           <div class="count" v-if="obtainedCounts[item.id]">x{{ obtainedCounts[item.id] }}</div>
 
-          <div v-if="uniqueDropKc.get(item.id)" class="kc-tooltip">
-            KC: {{ uniqueDropKc.get(item.id)?.join(', ') }}
+          <div v-if="hasKc(item.id)" class="kc-tooltip">
+            KC:
+            {{
+              item.id === PET_ITEM.id
+                ? formatKcList(petDropKc)
+                : formatKcList(uniqueDropKc.get(item.id) ?? [])
+            }}
           </div>
         </li>
       </ul>
